@@ -44,7 +44,7 @@ impl<'de, I: Iterator<Item = &'de str>> Parser<'de, I> {
             .and_then(KeyValue::new)
             .ok_or(DeserializerError::ExpectedValueNode)?;
         let val = kv.path().next().unwrap_or(kv.value);
-        println!("{:?}, reading {:?}", line, val);
+        // println!("{:?}, reading {:?}", line, val);
         Ok(val)
     }
     fn atom(&mut self) -> Result<AtomParser<'de>, DeserializerError> {
@@ -71,7 +71,7 @@ where
     where
         V: Visitor<'de>,
     {
-        println!("calling any");
+        // println!("calling any");
         let kv = self.peek_key_value()?;
         let level = kv.path().count();
         if !self.deser_any_col && level > 0 {
@@ -322,10 +322,10 @@ impl<'de, I: Iterator<Item = &'de str> + 'de> MapAccess<'de> for Parser<'de, I> 
         // dbg!(self.peek());
         // dbg!(self.cache, self.prefix, self.lines.peek());
         if self.iter.is_finished() {
-            println!("------------- done ----------");
+            // println!("------------- done ----------");
             return Ok(None);
         }
-        println!("reading map key");
+        // println!("reading map key");
         // dbg!(self.lines.peek());
         self.deser_any_col = true;
         let val = seed.deserialize(&mut *self).map(Some);
@@ -338,7 +338,7 @@ impl<'de, I: Iterator<Item = &'de str> + 'de> MapAccess<'de> for Parser<'de, I> 
     where
         V: DeserializeSeed<'de>,
     {
-        println!("reading map value");
+        // println!("reading map value");
         // dbg!(self.peek());
         let val = seed.deserialize(&mut *self);
         self.iter.decrement_prefix_level();
@@ -385,7 +385,7 @@ impl<'a, 'de, I: Iterator<Item = &'de str> + 'de> EnumAccess<'de> for &'a mut Pa
     where
         V: DeserializeSeed<'de>,
     {
-        println!("Reading variant");
+        // println!("Reading variant");
         self.deser_any_col = true;
         let val = seed.deserialize(&mut *self);
         self.deser_any_col = false;
@@ -397,7 +397,7 @@ impl<'a, 'de, I: Iterator<Item = &'de str> + 'de> VariantAccess<'de> for &'a mut
     type Error = DeserializerError;
 
     fn unit_variant(self) -> Result<(), Self::Error> {
-        println!("Reading unit variant");
+        // println!("Reading unit variant");
         Ok(())
     }
 
@@ -405,7 +405,7 @@ impl<'a, 'de, I: Iterator<Item = &'de str> + 'de> VariantAccess<'de> for &'a mut
     where
         T: DeserializeSeed<'de>,
     {
-        println!("Reading newtype variant");
+        // println!("Reading newtype variant");
         self.iter.increment_prefix_level();
         let val = seed.deserialize(&mut *self);
         self.iter.decrement_prefix_level();
@@ -416,7 +416,7 @@ impl<'a, 'de, I: Iterator<Item = &'de str> + 'de> VariantAccess<'de> for &'a mut
     where
         V: Visitor<'de>,
     {
-        println!("Reading tuple variant");
+        // println!("Reading tuple variant");
         self.iter.increment_prefix_level();
         let val = self.deserialize_tuple(len, visitor);
         self.iter.decrement_prefix_level();
@@ -431,7 +431,7 @@ impl<'a, 'de, I: Iterator<Item = &'de str> + 'de> VariantAccess<'de> for &'a mut
     where
         V: Visitor<'de>,
     {
-        println!("Reading struct variant");
+        // println!("Reading struct variant");
         self.iter.increment_prefix_level();
         let val = self.deserialize_map(visitor);
         self.iter.decrement_prefix_level();
