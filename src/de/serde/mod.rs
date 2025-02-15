@@ -25,9 +25,15 @@ where
     T::deserialize(&mut lex)
 }
 
-struct Parser<'de, I: Iterator> {
+#[derive(Clone)]
+struct Parser<'de, I>
+where
+    I: Iterator,
+    <I as Iterator>::Item: Clone,
+{
     iter: LexerChildren<'de, Peekable<I>>,
     deser_any_col: bool,
+    seq_offset: i64,
 }
 
 impl<'de, I: Iterator<Item = &'de str>> Parser<'de, I> {
@@ -36,6 +42,7 @@ impl<'de, I: Iterator<Item = &'de str>> Parser<'de, I> {
         Self {
             iter,
             deser_any_col: false,
+            seq_offset: 0,
         }
     }
     fn value(&mut self) -> Result<&'de str, DeserializerError> {
@@ -64,6 +71,7 @@ impl<'de, I: Iterator<Item = &'de str>> Parser<'de, I> {
 impl<'a, 'de, I: 'de> Deserializer<'de> for &'a mut Parser<'de, I>
 where
     I: Iterator<Item = &'de str>,
+    I: Clone,
 {
     type Error = DeserializerError;
 
@@ -312,7 +320,7 @@ where
     }
 }
 
-impl<'de, I: Iterator<Item = &'de str> + 'de> MapAccess<'de> for Parser<'de, I> {
+impl<'de, I: Iterator<Item = &'de str> + Clone + 'de> MapAccess<'de> for Parser<'de, I> {
     type Error = DeserializerError;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
@@ -349,7 +357,7 @@ impl<'de, I: Iterator<Item = &'de str> + 'de> MapAccess<'de> for Parser<'de, I> 
 
 const SEQ_ENDER: &'static [&'static str] = &["length", "num"];
 
-impl<'a, 'de, I: Iterator<Item = &'de str> + 'de> SeqAccess<'de> for Parser<'de, I> {
+impl<'a, 'de, I: Iterator<Item = &'de str> + Clone + 'de> SeqAccess<'de> for Parser<'de, I> {
     type Error = DeserializerError;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
@@ -359,24 +367,82 @@ impl<'a, 'de, I: Iterator<Item = &'de str> + 'de> SeqAccess<'de> for Parser<'de,
         if self.iter.is_finished() {
             return Ok(None);
         }
-        let ident = self.value()?;
-        if ident.chars().all(|x| x.is_ascii_digit()) {
-            self.iter.increment_prefix_level();
-            let val = seed.deserialize(&mut *self);
-            self.iter.decrement_prefix_level();
-            self.iter.next();
-            Some(val).transpose()
-        } else if SEQ_ENDER.iter().any(|x| ident.eq_ignore_ascii_case(x)) {
-            // length always comes last due to lexicographic ordering
-            // 0-9 < a-z
+
+        // This code sucks
+        let mut lookup = self.clone();
+        let mut values = std::collections::BTreeSet::new();
+        let mut length = None;
+
+        loop {
+            if lookup.iter.is_finished() {
+                break;
+            }
+            let ident = lookup.value()?;
+
+            if ident.chars().all(|x| x.is_ascii_digit()) {
+                let ident = ident.parse::<i64>().unwrap();
+                values.insert(ident);
+            } else if SEQ_ENDER.iter().any(|x| ident.eq_ignore_ascii_case(x)) {
+                lookup.iter.increment_prefix_level();
+                let marker = std::marker::PhantomData::<i64>;
+                length = marker.deserialize(&mut lookup).ok();
+                lookup.iter.decrement_prefix_level();
+                break;
+            } else {
+                return Err(DeserializerError::ExpectedSequenece);
+            }
+        }
+
+        if !values.contains(&self.seq_offset)
+            || (length.is_some() && self.seq_offset >= length.unwrap())
+        {
+            self.seq_offset = 0;
+            loop {
+                if self.iter.is_finished() {
+                    break;
+                }
+                let ident = self.value()?;
+
+                if ident.chars().all(|x| x.is_ascii_digit()) {
+                    continue;
+                } else if SEQ_ENDER.iter().any(|x| ident.eq_ignore_ascii_case(x)) {
+                    break;
+                } else {
+                    return Err(DeserializerError::ExpectedSequenece);
+                }
+            }
             Ok(None)
         } else {
-            Err(DeserializerError::ExpectedSequenece)
+            let mut lookup = self.clone();
+            let mut value = None;
+            while value.is_none() {
+                if lookup.iter.is_finished() {
+                    break;
+                }
+                let ident = lookup.value()?;
+
+                if ident.chars().all(|x| x.is_ascii_digit()) {
+                    let ident = ident.parse::<i64>().unwrap();
+                    if ident == self.seq_offset {
+                        lookup.iter.increment_prefix_level();
+                        value = Some(seed.deserialize(&mut lookup));
+                        lookup.iter.decrement_prefix_level();
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            self.seq_offset += 1;
+            value.transpose()
         }
     }
 }
 
-impl<'a, 'de, I: Iterator<Item = &'de str> + 'de> EnumAccess<'de> for &'a mut Parser<'de, I> {
+impl<'a, 'de, I: Iterator<Item = &'de str> + Clone + 'de> EnumAccess<'de>
+    for &'a mut Parser<'de, I>
+{
     type Error = DeserializerError;
 
     type Variant = Self;
@@ -393,7 +459,9 @@ impl<'a, 'de, I: Iterator<Item = &'de str> + 'de> EnumAccess<'de> for &'a mut Pa
     }
 }
 
-impl<'a, 'de, I: Iterator<Item = &'de str> + 'de> VariantAccess<'de> for &'a mut Parser<'de, I> {
+impl<'a, 'de, I: Iterator<Item = &'de str> + Clone + 'de> VariantAccess<'de>
+    for &'a mut Parser<'de, I>
+{
     type Error = DeserializerError;
 
     fn unit_variant(self) -> Result<(), Self::Error> {
@@ -533,9 +601,29 @@ extra=stuff";
 6=6
 7=7
 8=8
-9=9";
+9=9
+length=12";
         let data: Vec<i64> = from_str(input).unwrap();
         assert_eq!(data, (0..12).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn read_incorrect_seq() {
+        let input = "0=0
+1=1
+10=10
+11=11
+2=2
+3=3
+4=4
+5=5
+6=6
+7=7
+8=8
+9=9
+length=10";
+        let data: Vec<i64> = from_str(input).unwrap();
+        assert_eq!(data, (0..10).collect::<Vec<_>>());
     }
 
     #[test]
